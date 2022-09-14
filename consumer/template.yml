@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: An AWS Lambda application that processes records read from Amazon MSK and syncs to Amazon S3.
+Parameters:
+  ClusterArn:
+    Description: ARN of MSK Cluster
+    Type: String
+    Default: arn:aws:kafka:eu-west-1:809032347958:cluster/MSK-Cluster/ea8bdf82-a5ed-4516-a3cf-d9f2da0e728b-s1
+  VpcId:
+    Description: Vpc Id
+    Type: String
+  SubnetId1:
+    Description: Subnet Id 1
+    Type: String
+  SubnetId2:
+    Description: Subnet Id 2
+    Type: String
+  SubnetId3:
+    Description: Subnet Id 3
+    Type: String
+  CodeBucket:
+    Description: Bucketname for LambdaCode
+    Type: String
+  ApplicationCode:
+    Description: Name of code artifact on S3
+    Type: String
+  TopicName:
+    Description: Name of MSK Topic
+    Type: String
+
+Resources:
+  ProcessMskFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaMskPolicy
+    Properties:
+      FunctionName: MskLambda-Function
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref ApplicationCode
+      Handler: com.amazonaws.kafka.samples.HandlerMSK
+      Runtime: java8
+      Description: Java function to read MSK Data and store in S3
+      MemorySize: 512
+      Timeout: 300
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref DestinationBucket
+          RETRIES: "3"
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref SubnetId1
+          - !Ref SubnetId2
+          - !Ref SubnetId3
+      Role: !GetAtt LambdaRole.Arn
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MskLambda-SG
+      GroupName: MskLambda-SG
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic by default
+          IpProtocol: "-1"
+      VpcId:
+        !Ref VpcId
+
+  LambdaMskPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - kafka-cluster:AlterGroup
+              - kafka-cluster:Connect
+              - kafka-cluster:DescribeClusterDynamicConfiguration
+              - kafka-cluster:DescribeGroup
+              - kafka-cluster:DescribeTopic
+              - kafka-cluster:ReadData
+            Effect: Allow
+            Resource:
+              - !Ref ClusterArn
+              - Fn::Join:
+                  - ''
+                  - - 'arn:aws:kafka:'
+                    - Ref: AWS::Region
+                    - ":"
+                    - Ref: AWS::AccountId
+                    - ":group/MSK-Cluster/*/*"
+              - Fn::Join:
+                  - ''
+                  - - 'arn:aws:kafka:'
+                    - Ref: AWS::Region
+                    - ":"
+                    - Ref: AWS::AccountId
+                    - ":topic/MSK-Cluster/*/*"
+          - Action:
+              - glue:GetSchemaVersion
+            Effect: Allow
+            Resource: '*'
+          - Action:
+              - s3:PutObject
+            Effect: Allow
+            Resource:
+              - Fn::Join:
+                  - '*'
+        Version: '2012-10-17'
+      Description: ''
+      ManagedPolicyName: MskLambda-ManagedPolicy
+      Path: "/"
+
+  DestinationBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaMSKExecutionRole
+        - !Ref LambdaMskPolicy
+
+#  LambdaMSKEventSource:
+#    Type: AWS::Lambda::EventSourceMapping
+#    Properties:
+#      BatchSize: 10000
+#      EventSourceArn: !Ref ClusterArn
+#      FunctionName: !Ref ProcessMskFunction
+#      MaximumBatchingWindowInSeconds: 30
+#      StartingPosition: LATEST
+#      Topics:
+#      - !Ref TopicName
